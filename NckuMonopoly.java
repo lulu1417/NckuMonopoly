@@ -1,19 +1,21 @@
-import java.awt.MouseInfo;
 import java.awt.Point;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.Iterator;
 import java.util.Random;
+import java.util.Scanner;
+
+import javax.swing.ImageIcon;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
 
 import ingame.Cell;
-import ingame.CellType;
 import ingame.Game;
 import ingame.GameState;
 import ingame.GraphicImgItem;
 import ingame.GraphicItem;
 import ingame.GraphicTextItem;
 import ingame.Player;
+import ingame.Sound;
 
 public class NckuMonopoly {
 
@@ -25,20 +27,30 @@ public class NckuMonopoly {
 	//ctor
 	public NckuMonopoly() {
 		mainW = new MainWindow();
+		music = new Music();
+		sound = new Sound();
 		this.setGameState(GameState.START);
 		this.steppedScore = 0;
+		this.nextMoveNoEvent = false;
+		music.playMusic("bgm.wav");
+		music.check(musicOff);
 		//thread
 		while(true) {
+			
 			//timer
 			for(int i=0; i<Game.graphicItems.size(); ++i) Game.graphicItems.get(i).timerRun();
+			
 			//receive signals
 			for(String signal: Game.signals) {
-				System.out.println("Got signal: " + signal);
+				if(signal.equals("Button clicked: Music")){
+					if(!musicOff) musicOff = true;
+					else musicOff = false;
+					music.check(musicOff);
+				}
+				System.out.println("Got signal: "+signal);
 				switch (Game.gamestate) {
 				case START:
-					if(signal.equals("Button clicked: Start")){
-						this.start();
-					}
+					if(signal.equals("Button clicked: Start")) this.start();
 					break;
 				case ROLLING:
 					if(signal.equals("Button clicked: Roll")) {
@@ -47,9 +59,12 @@ public class NckuMonopoly {
 					}
 					break;
 				case EVENT:
-					if(signal.startsWith("Button clicked: Select")) {
+					if(signal.startsWith("Button clicked: Select score:")) {
 						mainW.getPlayingPanel().deleteSelections();
 						Random rng = new Random();
+						if(this.steppedScore>0)
+							sound.playSound("addPoints.wav", soundOff);
+						else sound.playSound("deduct.wav", soundOff);
 						if(signal.endsWith("lesson")) {
 							currentPlayer.addLesson(this.steppedScore);
 						} else if(signal.endsWith("club")) {
@@ -58,6 +73,40 @@ public class NckuMonopoly {
 							currentPlayer.addLove(this.steppedScore);
 						}
 						this.tickStart(21);
+					} else if(signal.startsWith("Button clicked: Select die point:")) {
+						mainW.getPlayingPanel().deleteDieSelections();
+						String diePointStr = signal.substring("Button clicked: Select die point: ".length());
+						int fateDiePoint = Integer.valueOf(diePointStr);
+						this.rollingNum = fateDiePoint;
+						this.tickStart(111);
+					}
+					break;
+				case FATE:
+					try {
+						Scanner scanner = new Scanner(signal);
+						String fateIdentifier = scanner.next() + " " + scanner.next();
+						if(fateIdentifier.equals("Fate ended:")) {
+							int fateType = scanner.nextInt();
+							int fatePoint = scanner.nextInt();
+							if(fatePoint>0)
+								sound.playSound("addPoints.wav", soundOff);
+							else sound.playSound("deduct.wav", soundOff);
+							switch (fateType) {
+							case 1:
+								currentPlayer.addLesson(fatePoint);
+								break;
+							case 2:
+								currentPlayer.addClub(fatePoint);
+								break;
+							default:
+								currentPlayer.addLove(fatePoint);
+								break;
+							}
+							this.setGameState(GameState.EVENT);
+							this.tickStart(21);
+						}
+					} catch (Exception e) {
+						e.printStackTrace();
 					}
 					break;
 				default:
@@ -66,7 +115,7 @@ public class NckuMonopoly {
 			Game.signals.clear();
 
 			//mouse
-			if(Game.gamestate != GameState.START && Game.gamestate != GameState.END) {
+			if(Game.gamestate != GameState.START && Game.gamestate != GameState.END && Game.gamestate != GameState.FATE) {
 				Point mouse_pos = mainW.getPlayingPanel().getMouseLocation();
 				for(Cell cell_pos: Game.cells) {
 					if((Math.abs(mouse_pos.getX() - cell_pos.getX()) < 50) && (Math.abs(mouse_pos.getY() - cell_pos.getY()) < 50)) {
@@ -104,12 +153,13 @@ public class NckuMonopoly {
 							this.rollingNum = newNum; //debug
 							//die img
 							String dieImg = "/die" + newNum + ".png";
-							GraphicItem die = new GraphicImgItem((Game.Width-250)/2+130, Game.Height/2, 100, 100, dieImg, Game.graphicItems);
+							GraphicItem die = new GraphicImgItem((Game.Width-250)/2+120, Game.Height/2, 100, 100, dieImg, Game.graphicItems);
+							sound.playSound("roll.wav", soundOff);
 							die.setLifeTime(i==times-1 ? 50 : standardTickAdd);
 							if(i == times-1) { //last time
 								//die number hint
-								String hintString = "¬Y•X¬Iº∆°G" + newNum;
-								GraphicItem hint = new GraphicTextItem((Game.Width-250)/2+140, Game.Height/2-100, 30, hintString, Game.graphicItems);
+								String hintString = "Êì≤Âá∫ÈªûÊï∏Ôºö" + newNum;
+								GraphicItem hint = new GraphicTextItem((Game.Width-250)/2+120, Game.Height/2-80, 30, hintString, Game.graphicItems);
 								hint.setLifeTime(50);
 								//change state
 								this.setGameState(GameState.MOVING);
@@ -122,106 +172,167 @@ public class NckuMonopoly {
 			case MOVING:
 				if(ticking) {
 					if(++tick>=20) {
-						this.currentPlayer.moveToNext();
+						sound.playSound("move.wav", soundOff);
+						if(this.rollingNum>0) this.currentPlayer.moveToNext();
 						if(--this.rollingNum<=0) this.setGameState(GameState.EVENT);
 						this.tickStart();
 					}
 				}
 				break;
 			case EVENT:
+				if(this.nextMoveNoEvent) { //event won't be triggered in this move
+					this.nextMoveNoEvent = false;
+					tickStart(21);
+				}
 				if(ticking) {
 					if(++tick==20) {
 						tickPause();
 						Cell steppedCell = currentPlayer.getCurrentCell();
 						switch(steppedCell.getCellType()) {
 							case NOTHING: //no event
-								mainW.getPlayingPanel().showEventName("°@°@°@≥o∏Ã§∞ªÚ≥£®S¶≥...", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+								sound.playSound("nothing.wav", soundOff);
+								mainW.getPlayingPanel().showEventName("ÈÄôË£°‰ªÄÈ∫ºÈÉΩÊ≤íÊúâ...", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 								tickStart(21);
 								break;
 							case SELECT: //select event
 								String selections[];
 								switch(steppedCell.getSelectPolicy()) {
 									case THREE: {
-										String selections_temp[] = {"Ω“∑~", "™¿πŒ", "∑R±°"};
+										String selections_temp[] = {"Ë™≤Ê•≠", "Á§æÂúò", "ÊÑõÊÉÖ"};
 										selections = selections_temp;
 										} break;
 									case LESSON: {
-										String selections_temp[] = {"Ω“∑~","",""}; 
+										String selections_temp[] = {"Ë™≤Ê•≠","",""}; 
 										selections = selections_temp;
 										} break;
 									case CLUB: {
-										String selections_temp[] = {"","™¿πŒ",""}; 
+										String selections_temp[] = {"","Á§æÂúò",""}; 
 										selections = selections_temp;
 										} break;
 									default: {
-										String selections_temp[] = {"","","∑R±°"}; 
+										String selections_temp[] = {"","","ÊÑõÊÉÖ"}; 
 										selections = selections_temp;
 										} break;
 								}
 								int score = steppedCell.getScore();
 								this.steppedScore = score;
+								if(score>0)
+									sound.playSound("goodluck.wav", soundOff);
+								else sound.playSound("badluck.wav", soundOff);
 								for(int i=0;i<selections.length;++i)
 									if(!selections[i].equals(""))
 										selections[i] = selections[i] + (score>0?"+":"") + score;
 								mainW.getPlayingPanel().createSelections(steppedCell.getMessage(),selections[0],selections[1],selections[2]);
 								break;
 							case START: //start event
-								mainW.getPlayingPanel().showEventName("¶^®Ï∞_¬I°A¿Ú±o§@¶ §∏", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+								sound.playSound("goodluck.wav", soundOff);
+								mainW.getPlayingPanel().showEventName("ÂõûÂà∞Ëµ∑ÈªûÔºåÁç≤Âæó‰∏ÄÁôæÂÖÉ", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 								currentPlayer.addMoney(100);
+								sound.playSound("addMoney.wav", soundOff);
 								tickStart(21);
 								break;
 							case CHANCE: //chance
-								int chanceCount = 5;
+								int chanceCount = 7;
 								Random rng = new Random();
 								int chanceNum = rng.nextInt(chanceCount);
 								switch (chanceNum) {
 								case 0: {
-									mainW.getPlayingPanel().showEventName("°@°@Java¬ºΩ“°AΩ“∑~¥Ó•b", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+									sound.playSound("badluck.wav", soundOff);
+									mainW.getPlayingPanel().showEventName("Ê©üÊúÉÔºöJavaÁøπË™≤ÔºåË™≤Ê•≠Ê∏õÂçä", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 									currentPlayer.addLesson(-currentPlayer.getLesson()/2);
+									sound.playSound("deduct.wav", soundOff);
 									tickStart(21);
 								} break;
 								case 1: {
-									mainW.getPlayingPanel().showEventName("°@°@πÔ§§µo≤º°A¿Ú±o200§∏", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+									sound.playSound("goodluck.wav", soundOff);
+									mainW.getPlayingPanel().showEventName("Ê©üÊúÉÔºöÂ∞ç‰∏≠ÁôºÁ•®ÔºåÁç≤Âæó200ÂÖÉ", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 									currentPlayer.addMoney(200);
+									sound.playSound("addMoney.wav", soundOff);
 									tickStart(21);
 								} break;
 								case 2: {
-									mainW.getPlayingPanel().showEventName("°@æﬂ®Ï50§∏", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+									sound.playSound("goodluck.wav", soundOff);
+									mainW.getPlayingPanel().showEventName("„ÄÄÊ©üÊúÉÔºöÊíøÂà∞50ÂÖÉ", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 									currentPlayer.addMoney(50);
+									sound.playSound("addMoney.wav", soundOff);
 									tickStart(21);
 								} break;
 								case 3: {
-									String chanceSelections[] = {"Ω“∑~","™¿πŒ","∑R±°"};
+									String chanceSelections[] = {"Ë™≤Ê•≠","Á§æÂúò","ÊÑõÊÉÖ"};
+									sound.playSound("badluck.wav", soundOff);
 									int chanceScore = -10;
 									this.steppedScore = chanceScore;
 									for(int i=0;i<chanceSelections.length;++i)
 										if(!chanceSelections[i].equals(""))
 											chanceSelections[i] = chanceSelections[i] + chanceScore;
-									mainW.getPlayingPanel().createSelections("¶Á™A¨Ô§œ",chanceSelections[0],chanceSelections[1],chanceSelections[2]);
+									mainW.getPlayingPanel().createSelections("Ê©üÊúÉÔºöË°£ÊúçÁ©øÂèç",chanceSelections[0],chanceSelections[1],chanceSelections[2]);
+									sound.playSound("deduct.wav", soundOff);
 								} break;
 								case 4: {
-									mainW.getPlayingPanel().showEventName("°@°@¶“§W¨„®s©“°Aæ«∑~+50", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+									sound.playSound("goodluck.wav", soundOff);
+									mainW.getPlayingPanel().showEventName("Ê©üÊúÉÔºöËÄÉ‰∏äÁ†îÁ©∂ÊâÄÔºåÂ≠∏Ê•≠+50", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
 									currentPlayer.addLesson(50);
+									sound.playSound("addPoints.wav", soundOff);
 									tickStart(21);
+								} break;
+								case 5: {
+									sound.playSound("goodluck.wav", soundOff);
+									mainW.getPlayingPanel().createDieSelections("Ê©üÊúÉÔºöÊê≠‰πòÂè∞ÂçóUberÔºåËá™Áî±ÈÅ∏ÊìáÊ≠•Êï∏ÂâçÈÄ≤");
+								} break;
+								case 6: {
+									mainW.getPlayingPanel().showEventName("Ê©üÊúÉÔºöÊ≤íÊ≥®ÊÑèË°å‰∫∫ËôüË™åÔºåÁôºÁîüËªäÁ¶ç", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
+									sound.playSound("badluck.wav", soundOff);
+									tickStart(131);
 								} break;
 								default:
 									break;
 								}
 								break;
-							default: //fate event, shop event
-								mainW.getPlayingPanel().showEventName("¶πÆÊ©|•ºßπ¶®", (Game.Width-250)/2+100, Game.Height/2-100, 90);
+							case FATE: //fate event
+								mainW.getPlayingPanel().showEventName("ÂëΩÈÅãÔºö" + steppedCell.getMessage(), (Game.Width-250)/2+250-50, Game.Height/2-100, 60);
+								tickStart(51);
+								break;
+							default: //shop event
+								mainW.getPlayingPanel().showEventName("ÊéõÊÄ•Ë®∫‰ΩèÈô¢", (Game.Width-250)/2+250-50, Game.Height/2-100, 90);
+								sound.playSound("badluck.wav", soundOff);
 								tickStart(21);
 								break;
 						}
-					} else if(tick>=50) {
+					} else if(tick==50) { //next player's rolling state
 						int id = this.currentPlayer.getID();
 						if(++id>=Game.playerCount) id=0;
 						this.currentPlayer = Game.players.get(id);
 						this.setGameState(GameState.ROLLING);
 						this.tickPause();
 						mainW.getPlayingPanel().createRollingButton();
+					} else if(tick==110) { //fate
+						Cell steppedCell = currentPlayer.getCurrentCell();
+						//this.setGameState(GameState.FATE, steppedCell.getScore());
+					} else if(tick==112) { //chance: choose die
+						//die img
+						String dieImg = "/die" + this.rollingNum + ".png";
+						GraphicItem die = new GraphicImgItem((Game.Width-250)/2+250, Game.Height/2, 100, 100, dieImg, Game.graphicItems);
+						die.setLifeTime(50);
+						//die number hint
+						String hintString = "ÈÅ∏ÊìáÈªûÊï∏Ôºö" + this.rollingNum;
+						GraphicItem hint = new GraphicTextItem((Game.Width-250)/2+250, Game.Height/2-80, 30, hintString, Game.graphicItems);
+						hint.setLifeTime(50);
+						//change state
+						this.nextMoveNoEvent = true;
+						this.setGameState(GameState.MOVING);
+						this.tickStart(-30);
+					} else if(tick==160) { //fate
+						currentPlayer.moveTo(21);
+						this.rollingNum = 0;
+						this.setGameState(GameState.MOVING);
+						this.tickStart(-30);
 					}
 				}
+				break;
+			case FATE:
+				/*FatePanel fatePanel = mainW.getFatePanel();
+				fatePanel.doTick();
+				fatePanel.repaint();*/
 				break;
 			default:
 				break;
@@ -258,7 +369,7 @@ public class NckuMonopoly {
 			if(i<2)
 				player.createScoreBoard(20, 30+i*600, "/scoreboard"+ (i+1) +".png", Game.graphicItems);
 			else 
-				player.createScoreBoard(1280, 30+(3-i)*600, "/scoreboard"+ (i+1) +".png", Game.graphicItems);
+				player.createScoreBoard(1300, 30+(3-i)*600, "/scoreboard"+ (i+1) +".png", Game.graphicItems);
 			if(i==0) this.currentPlayer = player;
 			Game.players.add(player);
 			if(i==Game.playerCount-1) {
@@ -269,6 +380,7 @@ public class NckuMonopoly {
 				}
 			}
 		}
+		//roll button
 		mainW.getPlayingPanel().createRollingButton();
 		//tick
 		this.tickPause();
@@ -291,19 +403,28 @@ public class NckuMonopoly {
 	
 	//get-set
 	public void setGameState(GameState gamestate) {
+		this.setGameState(gamestate, 0);
+	}
+	public void setGameState(GameState gamestate, int fateType) {
 		//debug
 		System.out.println("Gamestate changed: "
 						+ Game.gamestate.toString()
 						+ " to " +
 						gamestate.toString());
 		//main window
-		mainW.changePanel(gamestate);
+		try {
+			mainW.changePanel(gamestate, fateType);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 		Game.gamestate = gamestate;
 	}
 	//var
 	private MainWindow mainW;
+	private Music music;
+	private Sound sound;
 	private long tick;
-	private boolean ticking;
+	private boolean ticking, nextMoveNoEvent, musicOff, soundOff;
 	private Player currentPlayer;
 	private int rollingNum, steppedScore;
 }
